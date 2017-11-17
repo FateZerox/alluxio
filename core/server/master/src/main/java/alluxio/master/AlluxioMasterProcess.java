@@ -27,6 +27,7 @@ import alluxio.util.network.NetworkAddressUtils;
 import alluxio.util.network.NetworkAddressUtils.ServiceType;
 import alluxio.web.MasterWebServer;
 import alluxio.web.WebServer;
+import alluxio.util.JvmPauseMonitor;
 
 import com.google.common.base.Function;
 import com.google.common.base.Preconditions;
@@ -97,6 +98,9 @@ public class AlluxioMasterProcess implements MasterProcess {
 
   /** The journal system for writing journal entries and restoring master state. */
   protected final JournalSystem mJournalSystem;
+
+  /** The JVMMonitor Progress. */
+  private JvmPauseMonitor mJvmPauseMonitor;
 
   /**
    * Creates a new {@link AlluxioMasterProcess}.
@@ -253,11 +257,17 @@ public class AlluxioMasterProcess implements MasterProcess {
   protected void startServing(String startMessage, String stopMessage) {
     MetricsSystem.startSinks();
     startServingWebServer();
-    LOG.info("{} version {} binding to {} @ {} {}", this, RuntimeConstants.VERSION, mRpcBindAddress,
-        mRpcConnectAddress, startMessage);
+    startJvmMonitorProcess();
+    LOG.info("Alluxio master version {} started{}. "
+            + "bindHost={}, connectHost={}, rpcPort={}, webPort={}",
+        RuntimeConstants.VERSION,
+        startMessage,
+        NetworkAddressUtils.getBindAddress(ServiceType.MASTER_RPC),
+        NetworkAddressUtils.getConnectAddress(ServiceType.MASTER_RPC),
+        NetworkAddressUtils.getPort(ServiceType.MASTER_RPC),
+        NetworkAddressUtils.getPort(ServiceType.MASTER_WEB));
     startServingRPCServer();
-    LOG.info("{} version {} ended @ {} {}", this, RuntimeConstants.VERSION, mRpcConnectAddress,
-        stopMessage);
+    LOG.info("Alluxio master ended{}", stopMessage);
   }
 
   /**
@@ -273,6 +283,16 @@ public class AlluxioMasterProcess implements MasterProcess {
     mWebServer.addHandler(mMetricsServlet.getHandler());
     // start web ui
     mWebServer.start();
+  }
+
+  /**
+   * Starts jvm monitor process, to monitor jvm.
+   */
+  protected void startJvmMonitorProcess() {
+    if (Configuration.getBoolean(PropertyKey.MASTER_JVM_MONITOR_ENABLED)) {
+      mJvmPauseMonitor = new JvmPauseMonitor();
+      mJvmPauseMonitor.start();
+    }
   }
 
   private void registerServices(TMultiplexedProcessor processor, Map<String, TProcessor> services) {
@@ -319,11 +339,8 @@ public class AlluxioMasterProcess implements MasterProcess {
     Args args = new TThreadPoolServer.Args(mTServerSocket).maxWorkerThreads(mMaxWorkerThreads)
         .minWorkerThreads(mMinWorkerThreads).processor(processor).transportFactory(transportFactory)
         .protocolFactory(new TBinaryProtocol.Factory(true, true));
-    if (Configuration.getBoolean(PropertyKey.TEST_MODE)) {
-      args.stopTimeoutVal = 0;
-    } else {
-      args.stopTimeoutVal = Constants.THRIFT_STOP_TIMEOUT_SECONDS;
-    }
+
+    args.stopTimeoutVal = (int) Configuration.getMs(PropertyKey.MASTER_THRIFT_SHUTDOWN_TIMEOUT);
     mThriftServer = new TThreadPoolServer(args);
 
     // start thrift rpc server
@@ -344,6 +361,9 @@ public class AlluxioMasterProcess implements MasterProcess {
     if (mTServerSocket != null) {
       mTServerSocket.close();
       mTServerSocket = null;
+    }
+    if (mJvmPauseMonitor != null) {
+      mJvmPauseMonitor.stop();
     }
     if (mWebServer != null) {
       mWebServer.stop();

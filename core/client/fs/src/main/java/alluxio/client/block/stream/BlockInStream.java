@@ -63,7 +63,7 @@ public class BlockInStream extends InputStream implements BoundedStream, Seekabl
   private DataBuffer mCurrentPacket;
 
   private PacketReader mPacketReader;
-  private PacketReader.Factory mPacketReaderFactory;
+  private final PacketReader.Factory mPacketReaderFactory;
 
   private boolean mClosed = false;
   private boolean mEOF = false;
@@ -201,6 +201,9 @@ public class BlockInStream extends InputStream implements BoundedStream, Seekabl
     }
     if (mEOF) {
       closePacketReader();
+      Preconditions
+          .checkState(mPos >= mLength, PreconditionMessage.BLOCK_LENGTH_INCONSISTENT.toString(),
+              mId, mLength, mPos);
       return -1;
     }
     int toRead = Math.min(len, mCurrentPacket.readableBytes());
@@ -344,5 +347,12 @@ public class BlockInStream extends InputStream implements BoundedStream, Seekabl
    */
   public BlockInStreamSource Source() {
     return mInStreamSource;
+  }
+
+  /**
+   * @return the block ID
+   */
+  public long getId() {
+    return mId;
   }
 }

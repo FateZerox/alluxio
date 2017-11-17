@@ -84,20 +84,28 @@ public interface UnderFileSystem extends Closeable {
      */
     public static UnderFileSystem create(String path, UnderFileSystemConfiguration ufsConf) {
       // Try to obtain the appropriate factory
-      List<UnderFileSystemFactory> factories = UnderFileSystemFactoryRegistry.findAll(path);
+      List<UnderFileSystemFactory> factories =
+          UnderFileSystemFactoryRegistry.findAll(path, ufsConf);
       if (factories.isEmpty()) {
         throw new IllegalArgumentException("No Under File System Factory found for: " + path);
       }
 
       List<Throwable> errors = new ArrayList<>();
       for (UnderFileSystemFactory factory : factories) {
+        ClassLoader previousClassLoader = Thread.currentThread().getContextClassLoader();
         try {
+          // Reflection may be invoked during UFS creation on service loading which uses context
+          // classloader by default. Stashing the context classloader on creation and switch it back
+          // when creation is done.
+          Thread.currentThread().setContextClassLoader(factory.getClass().getClassLoader());
           // Use the factory to create the actual client for the Under File System
           return new UnderFileSystemWithLogging(factory.create(path, ufsConf));
         } catch (Throwable e) {
           // Catching Throwable rather than Exception to catch service loading errors
           errors.add(e);
           LOG.warn("Failed to create UnderFileSystem by factory {}: {}", factory, e.getMessage());
+        } finally {
+          Thread.currentThread().setContextClassLoader(previousClassLoader);
         }
       }
 
